@@ -60,6 +60,9 @@ class DataArguments:
     data_path: str = field(
         default=None, metadata={"help": "Path to the training data."}
     )
+    video_data: str = field(
+        default=None, metadata={"help": "Path to the training data."}
+    )
     lazy_preprocess: bool = False
     image_folder: Optional[str] = field(default=None)
     min_pixels: int = 256 * 28 * 28

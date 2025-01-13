@@ -168,3 +168,7 @@ scripts_tmp/
 logs/*.log
 
 testing.ipynb
+e_dataset
+images
+data
+debug

@@ -1,10 +1,11 @@
 import sys
 sys.path.append('/mnt/afs/chenxiaoxuan/modality_alignment/Qwen2-VL-Finetune/src')
 import os
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 import torch
 from peft import LoraConfig, get_peft_model
 import ast
-from transformers import AutoProcessor, BitsAndBytesConfig, Qwen2VLForConditionalGeneration, HfArgumentParser
+from transformers import AutoProcessor, BitsAndBytesConfig, Qwen2VLForConditionalGeneration, HfArgumentParser,Qwen2VLForConditionalGeneration_lm_head_3_out
 from training.trainer import QwenTrainer
 from training.data import make_supervised_data_module
 from training.params import DataArguments, ModelArguments, TrainingArguments
@@ -64,7 +65,7 @@ def train():
     parser = HfArgumentParser(
         (ModelArguments, DataArguments, TrainingArguments))
     
-    #apply_liger_kernel_to_qwen2_vl()
+    apply_liger_kernel_to_qwen2_vl()
     
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
@@ -102,7 +103,7 @@ def train():
             )
         ))
 
-    model = Qwen2VLForConditionalGeneration.from_pretrained(
+    model = Qwen2VLForConditionalGeneration_lm_head_3_out.from_pretrained(
         model_args.model_id,
         torch_dtype=compute_dtype,
         attn_implementation="flash_attention_2" if not training_args.disable_flash_attn2 else "sdpa", 

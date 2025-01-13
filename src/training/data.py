@@ -74,7 +74,8 @@ def get_video_info(video_path, max_pixels, fps):
                 "type": "video", 
                 "video": video_path,
                 "max_pixels": max_pixels,
-                "fps": fps
+                #"fps": fps,
+                "nframes":6,
             }
             ]
         }
@@ -90,13 +91,21 @@ class SupervisedDataset(Dataset):
     def __init__(
         self,
         data_path: str | list,
+        video_data: str | list,
         processor: transformers.ProcessorMixin,
         data_args: DataArguments,
         padding=True,
     ):
         super(SupervisedDataset, self).__init__()
+        list_data_dict = []
         if isinstance(data_path, str):
-            list_data_dict = json.load(open(data_path, "r"))
+            if data_path:
+                image_ds = json.load(open(data_path, "r",encoding="utf-8"))
+                list_data_dict += image_ds 
+            if video_data:
+                video_ds = json.load(open(video_data, "r",encoding="utf-8")) 
+                list_data_dict += video_ds
+            #list_data_dict = json.load(open(data_path, "r",encoding="utf-8"))
         else:
             list_data_dict = data_path
 
@@ -155,11 +164,10 @@ class SupervisedDataset(Dataset):
                         video_file = os.path.join(video_folder, video_file)
                 videos.append(get_video_info(video_file, self.max_pixel, self.data_args.fps))
         else:
-            grid_key = None
-            pixel_key = None
             images = None
             videos = None
 
+        sources_raw=copy.deepcopy(sources)
         sources = copy.deepcopy(llava_to_openai(sources['conversations'], is_video=is_video))
 
         all_input_ids = [] 
@@ -186,9 +194,8 @@ class SupervisedDataset(Dataset):
             if idx == 0:
                 inputs = processor(text=[user_input], images=images, videos=videos, padding=False, return_tensors='pt')
                 prompt_input_ids = inputs['input_ids']
-                if pixel_key and grid_key:
-                    all_pixel_values.append(inputs[pixel_key])
-                    all_image_grid_thw.append(inputs[grid_key])
+                all_pixel_values.append(inputs[pixel_key])
+                all_image_grid_thw.append(inputs[grid_key])
 
             else:
                 prompt_input_ids = processor.tokenizer(user_input, add_special_tokens=False, padding=False, return_tensors='pt')['input_ids']
@@ -216,9 +223,8 @@ class SupervisedDataset(Dataset):
         # eos_token_id = processor.tokenizer.convert_tokens_to_ids(DEFAULT_IM_END_TOKEN)
         # input_ids, labels = truncate_sequence(input_ids, labels, self.max_length, eos_token_id)
 
-        if pixel_key and grid_key:
-            pixel_values = torch.cat(all_pixel_values, dim=0)
-            image_thw = torch.cat(all_image_grid_thw, dim=0)
+        pixel_values = torch.cat(all_pixel_values, dim=0)
+        image_thw = torch.cat(all_image_grid_thw, dim=0)
 
         attention_mask = (input_ids > -1000000).to(torch.long)
 
@@ -228,12 +234,177 @@ class SupervisedDataset(Dataset):
             labels=labels,
         )
 
-        if pixel_key and grid_key:
+        data_dict[pixel_key] = pixel_values
+        data_dict[grid_key] = image_thw
+        
+        if 'x_min' in sources_raw and 'x_max' in sources_raw and 'x_mid_true' in sources_raw and 'data_table_path' in sources_raw :
+            data_dict['x_min']=torch.tensor([sources_raw['x_min']],dtype=torch.float32)
+            data_dict['x_max']=torch.tensor([sources_raw['x_max']],dtype=torch.float32)
+            data_dict['x_mid_true']=torch.tensor([sources_raw['x_mid_true']],dtype=torch.float32)
+            data_dict['data_table_path']=sources_raw['data_table_path']
+            data_dict['sources_raw']=sources_raw
+
+        return data_dict
+    
+class SupervisedDataset_check(Dataset):
+    """Dataset for supervised fine-tuning."""
+
+    def __init__(
+        self,
+        data_path: str | list,
+        video_data: str | list,
+        processor: transformers.ProcessorMixin,
+        data_args: DataArguments,
+        padding=True,
+    ):
+        super(SupervisedDataset_check, self).__init__()
+        list_data_dict = []
+        if isinstance(data_path, str):
+            if data_path:
+                image_ds = json.load(open(data_path, "r",encoding="utf-8"))
+                list_data_dict += image_ds 
+            if video_data:
+                video_ds = json.load(open(video_data, "r",encoding="utf-8")) 
+                list_data_dict += (video_ds)*5
+            #list_data_dict = json.load(open(data_path, "r",encoding="utf-8"))
+        else:
+            list_data_dict = data_path
+
+        self.processor = processor
+        self.list_data_dict = list_data_dict
+        self.data_args = data_args
+        self.padding = padding
+        self.min_pixel = data_args.min_pixels
+        self.max_pixel = data_args.max_pixels
+        self.fps = data_args.fps
+
+    def __len__(self):
+        return len(self.list_data_dict)
+
+    def __getitem__(self, i) -> Dict[str, torch.Tensor]:
+        raw_data = self.list_data_dict[i]
+        try:
+            sources = self.list_data_dict[i]
+            is_video = False
+
+            processor = self.processor
+            if "image" in sources:
+                videos = None
+                grid_key = "image_grid_thw"
+                pixel_key = "pixel_values"
+                
+                image_files = sources["image"]
+                image_folder = self.data_args.image_folder
+
+                if isinstance(image_files, str):
+                    image_files = [image_files]
+
+                images = []
+                
+                for image_file in image_files:
+                    if not os.path.exists(image_file):
+                        if not image_file.startswith("http"):
+                            image_file = os.path.join(image_folder, image_file)
+                    images.append(get_image_info(image_file, self.min_pixel, self.max_pixel))
+
+            elif "video" in sources:
+                is_video = True
+                images=None
+                grid_key = "video_grid_thw"
+                pixel_key = "pixel_values_videos"
+
+                video_files = sources["video"]
+                video_folder = self.data_args.image_folder
+
+                if isinstance(video_files, str):
+                    video_files = [video_files]
+
+                videos = []
+                for video_file in video_files:
+                    if not os.path.exists(video_file):
+                        if not video_file.startswith("http"):
+                            video_file = os.path.join(video_folder, video_file)
+                    videos.append(get_video_info(video_file, self.max_pixel, self.data_args.fps))
+            else:
+                images = None
+                videos = None
+
+            sources = copy.deepcopy(llava_to_openai(sources['conversations'], is_video=is_video))
+
+            all_input_ids = [] 
+            all_labels = []
+            all_pixel_values = []
+            all_image_grid_thw = []
+
+            # Qwen2-VL uses a default system message so I've added this.
+            if len(SYSTEM_MESSAGE) > 0:
+                system_message = f"{DEFAULT_IM_START_TOKEN}system\n{SYSTEM_MESSAGE}\n{DEFAULT_IM_END_TOKEN}\n"
+                system_message_input_ids = processor.tokenizer(system_message, add_special_tokens=False, return_tensors='pt')['input_ids']
+                system_labels = torch.full_like(system_message_input_ids, IGNORE_INDEX) 
+                
+                all_input_ids.append(system_message_input_ids.squeeze(0))
+                all_labels.append(system_labels.squeeze(0))
+
+            for idx, j in enumerate(range(0, len(sources), 2)):
+                user_input = sources[j]
+                gpt_response = sources[j + 1]
+
+                user_input = f"{DEFAULT_IM_START_TOKEN}{user_input['role']}\n{user_input['content']}\n{DEFAULT_IM_END_TOKEN}\n"
+                gpt_response = f"{DEFAULT_IM_START_TOKEN}{gpt_response['role']}\n{gpt_response['content']}\n{DEFAULT_IM_END_TOKEN}\n"
+                
+                if idx == 0:
+                    inputs = processor(text=[user_input], images=images, videos=videos, padding=False, return_tensors='pt')
+                    prompt_input_ids = inputs['input_ids']
+                    all_pixel_values.append(inputs[pixel_key])
+                    all_image_grid_thw.append(inputs[grid_key])
+
+                else:
+                    prompt_input_ids = processor.tokenizer(user_input, add_special_tokens=False, padding=False, return_tensors='pt')['input_ids']
+
+                response_input_ids = processor.tokenizer(gpt_response, add_special_tokens=False, padding=False, return_tensors='pt')['input_ids']
+
+                input_ids = torch.cat([prompt_input_ids, response_input_ids], dim=1).squeeze(0)
+                labels = torch.cat(
+                    [
+                        torch.tensor([IGNORE_INDEX] * len(prompt_input_ids[0])),  
+                        response_input_ids.squeeze(0),
+                    ],
+                    dim=0,
+                )
+
+                all_input_ids.append(input_ids)
+                all_labels.append(labels)
+
+            
+            # There is no need for eos or bos tokens in the input_ids
+            # Qwen2-VL doees not use them
+            input_ids = torch.cat(all_input_ids, dim=0).to(torch.long)
+            labels = torch.cat(all_labels, dim=0).to(torch.long)
+
+            # eos_token_id = processor.tokenizer.convert_tokens_to_ids(DEFAULT_IM_END_TOKEN)
+            # input_ids, labels = truncate_sequence(input_ids, labels, self.max_length, eos_token_id)
+
+            pixel_values = torch.cat(all_pixel_values, dim=0)
+            image_thw = torch.cat(all_image_grid_thw, dim=0)
+
+            attention_mask = (input_ids > -1000000).to(torch.long)
+
+            data_dict = dict(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels,
+            )
+
             data_dict[pixel_key] = pixel_values
             data_dict[grid_key] = image_thw
-        
-        return data_dict
-
+            
+            return data_dict
+        except Exception as e :
+            with open("/work/home/acehekbmzh/wjh/Qwen2-VL-Finetune/e_dataset/bad_data.jsonl",'w') as f:
+                f.write(json.dumps(raw_data,ensure_ascii=False)+'\n')
+            print(raw_data)
+            print(e)
+@dataclass
 class DataCollatorForSupervisedDataset(object):
     """Collate examples for supervised fine-tuning."""
 
@@ -247,24 +418,40 @@ class DataCollatorForSupervisedDataset(object):
         batch_image_thw = []
 
         sample = examples[0]
-
+        
+        if "x_min" in sample or "x_max" in sample or "x_mid_true" in sample:
+            assert "x_min" in sample
+            assert "x_max" in sample
+            assert "x_mid_true" in sample
+            assert 'data_table_path' in sample 
+            
         if "pixel_values_videos" in sample:
             grid_key = "video_grid_thw"
             pixel_key = "pixel_values_videos"
 
-        elif "pixel_values" in sample:
+        else:
             grid_key = "image_grid_thw"
             pixel_key = "pixel_values"
-        
-        else:
-            grid_key = None
-            pixel_key = None
-        
-        for example in examples:
-            batch_input_ids.append(example["input_ids"])
-            batch_label_ids.append(example["labels"])
 
-            if pixel_key in example and grid_key in example:
+        if "x_min" in sample or "x_max" in sample or "x_mid_true" in sample:
+            batch_x_min=[]
+            batch_x_max=[]
+            batch_x_mid_true=[]
+            for example in examples:
+                batch_input_ids.append(example["input_ids"])
+                batch_label_ids.append(example["labels"])
+                batch_pixel_values.append(example[pixel_key])
+                batch_image_thw.append(example[grid_key])
+                batch_x_min.append(example['x_min'])
+                batch_x_max.append(example['x_max'])
+                batch_x_mid_true.append(example['x_mid_true'])
+            x_min_values = torch.cat(batch_x_min, dim=0)
+            x_max_values = torch.cat(batch_x_max, dim=0)
+            x_mid_true_values = torch.cat(batch_x_mid_true, dim=0)
+        else:
+            for example in examples:
+                batch_input_ids.append(example["input_ids"])
+                batch_label_ids.append(example["labels"])
                 batch_pixel_values.append(example[pixel_key])
                 batch_image_thw.append(example[grid_key])
         
@@ -274,21 +461,30 @@ class DataCollatorForSupervisedDataset(object):
 
         attention_mask = input_ids != self.pad_token_id
         labels = pad_sequence(batch_label_ids, padding_side='right', padding_value=IGNORE_INDEX)
+        pixel_values = torch.cat(batch_pixel_values, dim=0)
+        image_thw = torch.cat(batch_image_thw, dim=0)
 
-
-        data_dict = {
-            'input_ids': input_ids,
-            'labels': labels,
-            'attention_mask': attention_mask,
-        }
-
-        if pixel_key and grid_key:
-            pixel_values = torch.cat(batch_pixel_values, dim=0)
-            image_thw = torch.cat(batch_image_thw, dim=0)
-            data_dict[pixel_key] = pixel_values
-            data_dict[grid_key] = image_thw
-
-        return data_dict
+        if "x_min" in sample or "x_max" in sample or "x_mid_true" in sample:
+            return {
+                    'input_ids': input_ids,
+                    'labels': labels,
+                    'attention_mask': attention_mask,
+                    pixel_key: pixel_values,
+                    grid_key: image_thw,
+                    'x_min': x_min_values,
+                    'x_max': x_max_values,
+                    'x_mid_true': x_mid_true_values,
+                    'data_table_path':sample['data_table_path'],
+                    'sources_raw':sample['sources_raw']
+                }
+        else:
+            return {
+                'input_ids': input_ids,
+                'labels': labels,
+                'attention_mask': attention_mask,
+                pixel_key: pixel_values,
+                grid_key: image_thw,
+            }
     
 
 def replace_image_tokens(input_string, is_video=False):
@@ -318,10 +514,19 @@ def llava_to_openai(conversations, is_video=False):
 def make_supervised_data_module(processor, data_args):
     """Make dataset and collator for supervised fine-tuning."""
     sft_dataset = SupervisedDataset(
-        data_path=data_args.data_path, processor=processor, data_args=data_args
+        data_path=data_args.data_path, video_data=data_args.video_data,processor=processor, data_args=data_args
     )
     data_collator = DataCollatorForSupervisedDataset(pad_token_id=processor.tokenizer.pad_token_id)
-
+    
+    return dict(train_dataset=sft_dataset,
+                eval_dataset=None,
+                data_collator=data_collator)
+def make_supervised_data_module_check(processor, data_args):
+    """Make dataset and collator for supervised fine-tuning."""
+    sft_dataset = SupervisedDataset_check(
+        data_path=data_args.data_path, video_data=data_args.video_data,processor=processor, data_args=data_args
+    )
+    data_collator = DataCollatorForSupervisedDataset(pad_token_id=processor.tokenizer.pad_token_id)
     return dict(train_dataset=sft_dataset,
                 eval_dataset=None,
                 data_collator=data_collator)

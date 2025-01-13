@@ -1,31 +1,33 @@
 #!/bin/bash
 
-export CUDA_VISIBLE_DEVICES="0,1"
+export CUDA_VISIBLE_DEVICES="4,5,6,7"
 
 # You can use 2B instead of 7B
-MODEL_NAME="/mnt/afs/chenxiaoxuan/hf_home/Qwen2-VL-7B-Instruct"
+MODEL_NAME="/mnt/afs/chenxiaoxuan/hf_home/Qwen2-VL-7B-Instruct_custom_3_out"
+OUTPUT_DIR="/mnt/afs/chenxiaoxuan/modality_alignment/Qwen2-VL-Finetune/output/debug_1220_sh"
 # MODEL_NAME="Qwen/Qwen2-VL-2B-Instruct"
 
 export PYTHONPATH=src:$PYTHONPATH
 
-deepspeed src/training/train.py \
+deepspeed --master_port 29601 \
+    src/training/train_custom.py \
     --deepspeed scripts/zero3_offload.json \
     --model_id $MODEL_NAME \
-    --data_path /mnt/afs/chenxiaoxuan/modality_alignment/Qwen2-VL-Finetune/data/train_data_1130_part_format.json \
+    --data_path /mnt/afs/chenxiaoxuan/modality_alignment/Qwen2-VL-Finetune/data/0.json \
     --freeze_vision_tower True \
     --freeze_llm False \
     --tune_merger True \
     --bf16 True \
     --fp16 False \
     --disable_flash_attn2 True \
-    --output_dir output/debug_1215 \
-    --num_train_epochs 5 \
+    --output_dir $OUTPUT_DIR \
+    --num_train_epochs 10 \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 1 \
     --min_pixels $((512 * 28 * 28)) \
     --max_pixels $((1024 * 28 * 28)) \
     --max_seq_length 2048 \
-    --learning_rate 1e-5 \
+    --learning_rate 1e-7 \
     --merger_lr 1e-5 \
     --vision_lr 2e-6 \
     --weight_decay 0. \
